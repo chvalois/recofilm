@@ -1,7 +1,8 @@
 Movie's Recommendations 
 ==============================
 
-This project is a starting Pack for MLOps projects based on the subject "movie_recommandation". 
+This project was done while following the ML Ops Course from Datascientest.
+It has been done by: Aurore Gailhard, Edouard Gobinet and myself (Charles de Valois)
 
 Project Organization
 ------------
