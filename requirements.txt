@@ -1,0 +1,27 @@
+# local package
+-e .
+
+# external requirements
+click
+Sphinx
+coverage
+awscli>=1.29.0
+flake8
+python-dotenv>=0.5.1
+pandas
+scikit-learn
+requests
+click
+pandas
+pytest
+psycopg2-binary
+fastapi==0.110.2
+httpx
+python-jose
+pyjwt
+httptools==0.1.* 
+uvicorn==0.29.0
+SQLAlchemy
+mlflow==2.13.1
+joblib==1.4.0
+scikit-surprise==1.1.3

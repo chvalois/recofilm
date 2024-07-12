@@ -1,0 +1,258 @@
+version: "3"
+
+services:
+
+  rclone:
+    image: rclone/rclone
+    container_name: rclone_docker
+    volumes:
+      - ./src/config:/config/rclone
+      - pg_project_data:/data
+    command: config
+    tty: true                           
+    stdin_open: true                    
+    networks:
+      - mynetwork
+
+  postgres-db:
+    image: postgres:16
+    container_name: postgres_db
+    env_file:
+      - .env
+    volumes:
+      - pg_project_data:/var/lib/postgresql/data
+    healthcheck:
+        test: ["CMD", "pg_isready", "-U", "admin"]
+        interval: 5s
+        retries: 5
+    networks:
+      - mynetwork
+    ports:
+      - "5433:5432"
+
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    container_name: postgres_exporter
+    env_file:
+      - .env
+    environment:
+      DATA_SOURCE_NAME: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-db:5432/${POSTGRES_DB}?sslmode=disable
+    ports:
+      - "9187:9187"
+    networks:
+      - mynetwork
+    depends_on:
+      - postgres-db
+
+  cadvisor:
+    image: google/cadvisor:latest
+    container_name: cadvisor
+    ports:
+      - "8081:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /sys:/sys
+      - /var/lib/docker:/var/lib/docker
+    networks:
+      - mynetwork
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node_exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    networks:
+      - mynetwork
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    ports:
+      - "9093:9093"
+    networks:
+      - mynetwork
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus_docker
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus_rules.yml:/etc/prometheus/prometheus_rules.yml
+    networks:
+      - mynetwork
+    ports:
+      - "9090:9090"
+    depends_on:
+      - alertmanager
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana_docker
+    ports:
+      - "3000:3000"
+    networks:
+      - mynetwork
+    depends_on:
+      - prometheus
+    volumes:
+      - ./grafana/dashboards/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/datasources/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+
+  postgres-airflow:
+    image: postgres:16
+    container_name: postgres_airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - pg_airflow_data:/var/lib/postgresql/data
+    networks:
+      - mynetwork
+    ports:
+      - "5432:5432"
+
+  airflow-init:
+    image: chvalois/recofilm:0.4
+    container_name: airflow_init
+    restart: on-failure
+    depends_on:
+      - postgres-airflow
+      - postgres-db
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: tIQHaUSQW7Ic4SbQBKoOtEm4WvuU6_go5-1QVt6lKGI=
+      PYTHONPATH: /opt/airflow
+      MLFLOW_TRACKING_URI: http://mlflow:5001
+    env_file:
+      - .env
+    volumes:
+      - ./src/dags:/opt/airflow/dags
+      - ./src/logs:/opt/airflow/logs
+      - ./src/plugins:/opt/airflow/plugins
+      - ./src:/opt/airflow/src
+      - ./tests:/opt/airflow/tests
+      - ./api_directory:/opt/airflow/api_directory
+      - ./MLFlow:/opt/airflow/mlflow
+    entrypoint: |
+      bash -c "
+      airflow db init &&
+      airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com
+      "
+    networks:
+      - mynetwork
+
+  airflow-webserver:
+    image: chvalois/recofilm:0.4
+    container_name: airflow_webserver
+    restart: always
+    depends_on:
+      - postgres-airflow
+      - postgres-db
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: tIQHaUSQW7Ic4SbQBKoOtEm4WvuU6_go5-1QVt6lKGI=
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: 'true'
+      PYTHONPATH: /opt/airflow
+      MLFLOW_TRACKING_URI: http://mlflow:5001
+    env_file:
+      - .env
+    volumes:
+      - ./src/dags:/opt/airflow/dags
+      - ./src/logs:/opt/airflow/logs
+      - ./src/plugins:/opt/airflow/plugins
+      - ./src:/opt/airflow/src
+      - ./tests:/opt/airflow/tests
+      - ./api_directory:/opt/airflow/api_directory
+      - ./MLFlow:/opt/airflow/mlflow
+    ports:
+      - "8080:8080"
+    entrypoint: /bin/bash -c "pip install pytest && airflow webserver"
+    networks:
+      - mynetwork
+
+  airflow-scheduler:
+    image: chvalois/recofilm:0.4
+    container_name: airflow_scheduler
+    restart: always
+    depends_on:
+      - postgres-airflow
+      - postgres-db
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: tIQHaUSQW7Ic4SbQBKoOtEm4WvuU6_go5-1QVt6lKGI=
+      PYTHONPATH: /opt/airflow
+      MLFLOW_TRACKING_URI: http://mlflow:5001
+    env_file:
+      - .env
+    volumes:
+      - ./src/dags:/opt/airflow/dags
+      - ./src/logs:/opt/airflow/logs
+      - ./src/plugins:/opt/airflow/plugins
+      - ./src:/opt/airflow/src
+      - ./tests:/opt/airflow/tests
+      - ./api_directory:/opt/airflow/api_directory
+      - ./MLFlow:/opt/airflow/mlflow
+    entrypoint: /bin/bash -c "pip install pytest && airflow scheduler"
+    networks:
+      - mynetwork
+
+  api:
+    build:
+      context: .
+      dockerfile: ./dockerfiles/Dockerfile_api
+    image: fastapi_image:latest 
+    container_name: api_docker 
+    volumes:
+      - ./src:/app/src
+      - ./api_directory/logs/:/app/api_directory/logs/
+      - ./cache:/app/cache
+    ports:
+      - "8000:8000"
+    environment:
+      - MEMORY=16G
+      - CPUS=8
+      - MLFLOW_TRACKING_URI=http://mlflow:5001
+    env_file:
+      - .env
+    networks:
+      - mynetwork  
+    depends_on:
+      - mlflow
+
+  mlflow:
+    build:
+      context: .  
+      dockerfile: ./dockerfiles/Dockerfile_mlflow
+    image: mlflow_image:latest  
+    container_name: mlflow_docker 
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./MLFlow:/app/
+    networks:
+      - mynetwork  
+
+volumes:
+  pg_airflow_data:
+  pg_project_data:
+  mlflow:
+
+networks:
+  mynetwork:
+    driver: bridge
