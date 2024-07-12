@@ -4,7 +4,6 @@ Movie's Recommendations
 This project was done while following the ML Ops Course from Datascientest.
 
 It has been done by: Aurore Gailhard, Edouard Gobinet and myself (Charles de Valois)
-
 ![image](https://github.com/user-attachments/assets/a1556a8d-9178-4566-853b-05e3281ac4d9)
 
 
